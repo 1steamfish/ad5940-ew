@@ -1,0 +1,28 @@
+# Icarus Verilog compiled simulation objects
+*.vvp
+
+# VCD waveform dumps
+*.vcd
+
+# GTKWave save files
+*.gtkw
+*.lxt
+*.lxt2
+*.fst
+
+# Synthesis / place-and-route output directories (Vivado, Quartus, etc.)
+work/
+.Xil/
+*.bit
+*.bin
+*.mcs
+*.prm
+*.xsa
+*.xpr
+*.runs/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.gen/
+*.log
+*.jou
