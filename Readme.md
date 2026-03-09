@@ -118,3 +118,126 @@
 一句话总结：它不是“演示如何连续采样”，而是一个自动化的 **Notch 滤波链路 + Sequencer + FIFO** 的组合测试，用来验证各个采样参数下 Notch 能工作且结果误差在规定阈值内。
 
 如果你想把这个测试改成“只测某一组你关心的 OSR/速率”或者“把 50/60Hz 的目标频点和 DL 结果打印得更直观”，我也可以直接帮你改代码。
+
+---
+
+## FPGA Verilog 实现说明
+
+`fpga/` 目录下包含了对 `AD5940_ADCPolling.c` 的 FPGA Verilog 等效实现，可在任何支持 Verilog-2012 的 FPGA 工具链或仿真器上使用。
+
+### 文件说明
+
+| 文件 | 说明 |
+|------|------|
+| `fpga/ad5940_spi_master.v` | AD5940 两阶段 SPI 主控器（Mode 0，支持 16/32-bit 寄存器宽度，可参数化时钟分频 `CLK_DIV`） |
+| `fpga/ad5940_adc_polling.v` | 顶层 ADC 轮询逻辑：复位 → 写 22 个初始化寄存器 → 轮询 `SINC2RDY` → 读 `SINC2DAT` → 输出 `adc_valid`/`adc_data` |
+| `fpga/tb_ad5940_adc_polling.v` | 仿真 Testbench，含行为级 SPI Slave 模型，5/5 样本全部通过测试 |
+
+**顶层信号接口（`ad5940_adc_polling`）**
+
+```
+clk        输入    系统时钟（示例 50 MHz）
+rst_n      输入    低有效复位
+adc_valid  输出    ADC 结果就绪单周期脉冲
+adc_data   输出    16-bit ADC 原始码（0x8000 = 差分零点）
+state_out  输出    内部状态机编号（调试用）
+afe_rst_n  输出    AD5940 硬件复位（低有效）
+spi_cs_n   输出    SPI 片选（低有效）
+spi_clk    输出    SPI 时钟
+spi_mosi   输出    SPI 主→从数据
+spi_miso   输入    SPI 从→主数据
+```
+
+**电压换算（与 C 代码一致）**
+
+```
+diff_volt = (adc_data / 32768.0 - 1.0) / 1.5 * 1.82   [V]
+volt      = diff_volt + 1.11                             [V]
+```
+
+### 如何仿真
+
+需要安装 [Icarus Verilog](https://bleyer.org/icarus/)：
+
+```bash
+# 编译
+iverilog -g2012 -o sim.vvp \
+    fpga/ad5940_spi_master.v \
+    fpga/ad5940_adc_polling.v \
+    fpga/tb_ad5940_adc_polling.v
+
+# 运行仿真
+vvp sim.vvp
+```
+
+预期输出：
+
+```
+[TB] 5 / 5 samples PASSED
+[TB] ALL TESTS PASSED
+```
+
+---
+
+## 如何新建分支并将本 PR 的代码合并进去
+
+> **场景**：Copilot 已将 FPGA Verilog 代码推送到分支
+> `copilot/implement-adc-polling-function`，你想在自己的工作分支中使用这些代码。
+
+### 方法一：基于 Copilot 分支新建你的工作分支
+
+```bash
+# 1. 克隆仓库（如已克隆可跳过）
+git clone https://github.com/1steamfish/ad5940-ew.git
+cd ad5940-ew
+
+# 2. 拉取最新远程分支信息
+git fetch origin
+
+# 3. 基于 Copilot 分支创建你自己的新分支
+git checkout -b my-fpga-work origin/copilot/implement-adc-polling-function
+
+# 现在你的分支已经包含了所有 FPGA 代码，可以在此基础上继续开发
+```
+
+### 方法二：将 Copilot 分支合并到你已有的分支
+
+```bash
+# 1. 切换到你的目标分支（例如 main 或你自己的开发分支）
+git checkout main          # 或替换为你的分支名
+
+# 2. 拉取最新内容
+git pull origin main
+
+# 3. 将 Copilot 分支合并进来
+git merge origin/copilot/implement-adc-polling-function
+
+# 4. 如有冲突，手动解决后执行
+git add .
+git commit -m "Merge FPGA ADC polling implementation"
+
+# 5. 推送到远程
+git push origin main       # 或替换为你的分支名
+```
+
+### 方法三：通过 GitHub 网页合并 Pull Request
+
+1. 打开本仓库的 [Pull Requests](https://github.com/1steamfish/ad5940-ew/pulls) 页面
+2. 找到包含 `fpga/` 目录文件的 PR
+3. 点击 **"Merge pull request"** → **"Confirm merge"**
+4. 合并后在本地执行 `git pull origin main` 同步最新代码
+
+### 合并后目录结构
+
+```
+ad5940-ew/
+├── fpga/
+│   ├── ad5940_spi_master.v       ← SPI 主控器
+│   ├── ad5940_adc_polling.v      ← ADC 轮询顶层
+│   ├── tb_ad5940_adc_polling.v   ← 仿真 Testbench
+│   └── .gitignore                ← 排除仿真编译产物
+├── AD5940_ADCPolling.c
+├── AD5940_ADCMeanFIFO.c
+├── AD5940_ADCNotchTest.c
+└── ...
+```
