@@ -33,6 +33,8 @@
 //
 // Parameters
 //   CLK_DIV      – passed to ad5940_spi_master; controls SPI clock speed.
+//                  Default 3 → ~8.33 MHz SPI @ 50 MHz sys_clk.
+//                  Use CLK_DIV=5 with a 100 MHz sys_clk for exactly 10 MHz.
 //   RESET_CYCLES – how many clk cycles afe_rst_n is held low (default: 100 µs @ 50 MHz).
 //   BOOT_CYCLES  – how many clk cycles to wait after reset before SPI access
 //                  (default: 10 ms @ 50 MHz).
@@ -50,7 +52,7 @@
 `timescale 1ns/1ps
 
 module ad5940_adc_polling #(
-    parameter CLK_DIV      = 4,         // SPI clock: sys_clk / (2*CLK_DIV)
+    parameter CLK_DIV      = 3,         // SPI clock: sys_clk / (2*CLK_DIV); ~8.33 MHz @ 50 MHz
     parameter RESET_CYCLES = 5_000,     // afe_rst_n low duration  (default ~100 µs @ 50 MHz)
     parameter BOOT_CYCLES  = 500_000    // wait after reset        (default ~10 ms @ 50 MHz)
 )(
