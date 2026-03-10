@@ -30,12 +30,13 @@
 // Parameter:
 //   CLK_DIV – system clock cycles per SCLK half-period.
 //             SCLK_freq = sys_clk / (2 * CLK_DIV).
-//             Default 4 → 6.25 MHz for a 50 MHz system clock (max is 16 MHz).
+//             Default 3 → ~8.33 MHz for a 50 MHz system clock (max is 16 MHz).
+//             For exactly 10 MHz use CLK_DIV=5 with a 100 MHz system clock.
 // =============================================================================
 `timescale 1ns/1ps
 
 module ad5940_spi_master #(
-    parameter CLK_DIV = 4
+    parameter CLK_DIV = 3
 )(
     input  wire        clk,
     input  wire        rst_n,
