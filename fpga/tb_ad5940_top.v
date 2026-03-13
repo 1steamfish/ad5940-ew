@@ -5,13 +5,23 @@
 //
 // Uses the same behavioural AD5940 SPI slave model as tb_ad5940_adc_polling.v.
 // A simple UART-receive task samples the uart_tx_pin output and reconstructs
-// each received byte, then checks that the two bytes of every sample reassemble
-// to 0x8000 (the mid-scale ADC code returned by the slave model).
+// each received byte.
+//
+// Each ADC sample is now transmitted as four consecutive UART bytes:
+//   Byte 0 : adc_data[15:8]  raw ADC code high byte
+//   Byte 1 : adc_data[7:0]   raw ADC code low byte
+//   Byte 2 : diff_mv[15:8]   signed differential voltage (mV), high byte
+//   Byte 3 : diff_mv[7:0]    signed differential voltage (mV), low byte
+//
+// The SPI slave always returns SINC2DAT = 0x8000 (mid-scale), so the expected
+// values are:
+//   raw word  = 0x8000  (mid-scale ADC code)
+//   diff_mv   = 0x0000  (0 mV differential; (0x8000 - 32768) * gain = 0)
 //
 // Simulation speed-up:
 //   CLK_DIV=2, RESET_CYCLES=10, BOOT_CYCLES=20 to shorten init time.
-//   BAUD_RATE=5_000_000 → CLKS_PER_BIT=10, so each 2-byte word takes only
-//   200 system-clock cycles to transmit.
+//   BAUD_RATE=5_000_000 → CLKS_PER_BIT=10, so each 4-byte packet takes only
+//   400 system-clock cycles to transmit.
 // =============================================================================
 `timescale 1ns/1ps
 
@@ -228,9 +238,9 @@ module tb_ad5940_top;
     integer sample_count;
     integer pass_count;
 
-    reg [7:0]  recv_high;
-    reg [7:0]  recv_low;
-    reg [15:0] recv_word;
+    reg [7:0]  recv_b0, recv_b1, recv_b2, recv_b3;
+    reg [15:0] recv_raw;    // bytes 0-1: raw ADC code
+    reg [15:0] recv_mv;     // bytes 2-3: diff_mv (signed mV)
 
     initial begin
         sample_count  = 0;
@@ -245,45 +255,56 @@ module tb_ad5940_top;
         $display("[TB-TOP] Reset released, waiting for UART samples...");
 
         // --- Phase 1: collect 3 samples with the default configuration ---
-        $display("[TB-TOP] Phase 1: default configuration");
+        // Slave returns SINC2DAT = 0x8000 (mid-scale).
+        // Expected: raw = 0x8000, diff_mv = 0x0000 (0 mV differential).
+        $display("[TB-TOP] Phase 1: default configuration (PGA x1.5)");
         repeat (3) begin
-            uart_recv(recv_high);
-            uart_recv(recv_low);
-            recv_word    = {recv_high, recv_low};
+            uart_recv(recv_b0);
+            uart_recv(recv_b1);
+            uart_recv(recv_b2);
+            uart_recv(recv_b3);
+            recv_raw     = {recv_b0, recv_b1};
+            recv_mv      = {recv_b2, recv_b3};
             sample_count = sample_count + 1;
 
-            $display("[TB-TOP] Sample #%0d : 0x%04X (high=0x%02X  low=0x%02X)",
-                     sample_count, recv_word, recv_high, recv_low);
+            $display("[TB-TOP] Sample #%0d : raw=0x%04X  diff_mv=0x%04X (%0d mV)",
+                     sample_count, recv_raw, recv_mv, $signed(recv_mv));
 
-            if (recv_word === 16'h8000) begin
-                $display("[TB-TOP]   PASS – received 0x8000");
+            if (recv_raw === 16'h8000 && recv_mv === 16'h0000) begin
+                $display("[TB-TOP]   PASS – raw=0x8000  diff_mv=0 mV");
                 pass_count = pass_count + 1;
             end else begin
-                $display("[TB-TOP]   FAIL – expected 0x8000, got 0x%04X", recv_word);
+                $display("[TB-TOP]   FAIL – expected raw=0x8000 diff_mv=0x0000, got raw=0x%04X diff_mv=0x%04X",
+                         recv_raw, recv_mv);
             end
         end
 
         // --- Phase 2: send a config command to change PGA to ×2 (CMD=0x02, VAL=2) ---
-        $display("[TB-TOP] Sending config: CMD=0x02 (PGA), VAL=0x02 (×2)");
+        $display("[TB-TOP] Sending config: CMD=0x02 (PGA), VAL=0x02 (x2)");
         cfg_send(8'h02, 8'h02);
         $display("[TB-TOP] Config command sent, waiting for re-init and new samples...");
 
         // --- Phase 3: collect 2 samples after reconfiguration ---
-        $display("[TB-TOP] Phase 3: after PGA reconfiguration");
+        // Mid-scale code 0x8000 still gives diff_mv = 0 regardless of PGA.
+        $display("[TB-TOP] Phase 3: after PGA reconfiguration (PGA x2)");
         repeat (2) begin
-            uart_recv(recv_high);
-            uart_recv(recv_low);
-            recv_word    = {recv_high, recv_low};
+            uart_recv(recv_b0);
+            uart_recv(recv_b1);
+            uart_recv(recv_b2);
+            uart_recv(recv_b3);
+            recv_raw     = {recv_b0, recv_b1};
+            recv_mv      = {recv_b2, recv_b3};
             sample_count = sample_count + 1;
 
-            $display("[TB-TOP] Sample #%0d : 0x%04X (high=0x%02X  low=0x%02X)",
-                     sample_count, recv_word, recv_high, recv_low);
+            $display("[TB-TOP] Sample #%0d : raw=0x%04X  diff_mv=0x%04X (%0d mV)",
+                     sample_count, recv_raw, recv_mv, $signed(recv_mv));
 
-            if (recv_word === 16'h8000) begin
-                $display("[TB-TOP]   PASS – received 0x8000");
+            if (recv_raw === 16'h8000 && recv_mv === 16'h0000) begin
+                $display("[TB-TOP]   PASS – raw=0x8000  diff_mv=0 mV");
                 pass_count = pass_count + 1;
             end else begin
-                $display("[TB-TOP]   FAIL – expected 0x8000, got 0x%04X", recv_word);
+                $display("[TB-TOP]   FAIL – expected raw=0x8000 diff_mv=0x0000, got raw=0x%04X diff_mv=0x%04X",
+                         recv_raw, recv_mv);
             end
         end
 

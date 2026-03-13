@@ -37,10 +37,21 @@
 // A new configuration triggers a full re-initialisation of the AD5940 (all
 // 22 SPI writes) so it takes effect on the first ADC sample after init.
 //
-// UART TX output (adc_data over serial):
-//   Each ADC sample is transmitted as two consecutive UART bytes, MSB first:
-//   Byte 0 : adc_data[15:8]  (high byte)
-//   Byte 1 : adc_data[7:0]   (low byte)
+// UART TX output (adc_data + converted voltage over serial):
+//   Each ADC sample is transmitted as four consecutive UART bytes, MSB first:
+//   Byte 0 : adc_data[15:8]   raw ADC code high byte
+//   Byte 1 : adc_data[7:0]    raw ADC code low byte
+//   Byte 2 : diff_mv[15:8]    signed differential voltage, high byte (mV)
+//   Byte 3 : diff_mv[7:0]     signed differential voltage, low byte  (mV)
+//
+//   diff_mv is the output of ad5940_adc_code2volt: it represents the
+//   differential voltage V_MuxP − V_MuxN in signed 16-bit millivolts.
+//   The conversion mirrors AD5940_ADCCode2Volt() from ad5940lib/ad5940.c:
+//     diff_mv = (adc_code − 32768) × 1.835 / (32768 × pga_gain)   [mV]
+//   To recover the single-ended voltage, add the VSET1P1 reference:
+//     volt_mv = diff_mv + 1110   [mV]   (valid when MuxN = VSET1P1)
+//   For current measurements (mode 2, MuxP = LPTIA0_P), the current in
+//   microamps is recovered by: I_uA = diff_mv * 1000 / Rtia_ohm
 //
 // SPI clock:
 //   SCLK = CLK_FREQ / (2 × CLK_DIV)
@@ -164,6 +175,23 @@ module ad5940_top #(
     );
 
     // =========================================================================
+    // ADC code to voltage converter
+    //
+    // Combinational module that converts the raw 16-bit ADC code to a signed
+    // 16-bit differential voltage in millivolts (mV).  The conversion uses
+    // the same formula as AD5940_ADCCode2Volt() in ad5940lib/ad5940.c.
+    // =========================================================================
+    wire [15:0] diff_mv;    // signed 16-bit differential voltage (mV)
+    wire [15:0] single_mv;  // signed 16-bit single-ended voltage (mV, = diff_mv + 1110)
+
+    ad5940_adc_code2volt u_code2volt (
+        .adc_code  (adc_data),
+        .pga_sel   (pga_r),
+        .diff_mv   (diff_mv),
+        .single_mv (single_mv)
+    );
+
+    // =========================================================================
     // UART transmitter
     // =========================================================================
     reg  [7:0] uart_data;
@@ -186,25 +214,35 @@ module ad5940_top #(
     );
 
     // =========================================================================
-    // Serialise 16-bit ADC result as two UART bytes: MSB first, then LSB.
+    // Serialise each ADC sample as four UART bytes (MSB first):
+    //   Byte 0 : adc_data[15:8]  raw ADC code, high byte
+    //   Byte 1 : adc_data[7:0]   raw ADC code, low byte
+    //   Byte 2 : diff_mv[15:8]   signed differential voltage (mV), high byte
+    //   Byte 3 : diff_mv[7:0]    signed differential voltage (mV), low byte
     //
     // State machine:
-    //   TX_IDLE – waiting for adc_valid; new samples are ignored while busy.
-    //   TX_HIGH – high byte handed to uart_tx; wait for transmission to finish.
-    //   TX_LOW  – low byte handed to uart_tx; wait for transmission to finish.
+    //   TX_IDLE   – waiting for adc_valid; samples arriving while busy are dropped.
+    //   TX_RAW_HI – raw-code high byte handed to uart_tx; wait for completion.
+    //   TX_RAW_LO – raw-code low byte handed to uart_tx; wait for completion.
+    //   TX_MV_HI  – diff_mv high byte handed to uart_tx; wait for completion.
+    //   TX_MV_LO  – diff_mv low byte handed to uart_tx; wait for completion.
     // =========================================================================
-    localparam [1:0]
-        TX_IDLE = 2'd0,
-        TX_HIGH = 2'd1,
-        TX_LOW  = 2'd2;
+    localparam [2:0]
+        TX_IDLE   = 3'd0,
+        TX_RAW_HI = 3'd1,
+        TX_RAW_LO = 3'd2,
+        TX_MV_HI  = 3'd3,
+        TX_MV_LO  = 3'd4;
 
-    reg [1:0]  tx_state;
+    reg [2:0]  tx_state;
     reg [15:0] adc_hold;   // captured copy of adc_data
+    reg [15:0] mv_hold;    // captured copy of diff_mv
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             tx_state   <= TX_IDLE;
             adc_hold   <= 16'h0;
+            mv_hold    <= 16'h0;
             uart_data  <= 8'h0;
             uart_valid <= 1'b0;
         end else begin
@@ -212,37 +250,62 @@ module ad5940_top #(
 
             case (tx_state)
                 // -----------------------------------------------------------------
-                // Wait for an ADC result; capture it and start sending the high byte.
-                // Any adc_valid that arrives while TX_HIGH or TX_LOW is in progress
-                // is silently dropped (ADC rate << UART byte rate, so this never
-                // happens under normal operating conditions).
+                // Wait for an ADC result.  Capture the raw code and the converted
+                // voltage at the same clock edge, then start the raw high byte.
+                // Any adc_valid that arrives while transmission is in progress is
+                // silently dropped (ADC rate << UART byte rate in normal use).
                 // -----------------------------------------------------------------
                 TX_IDLE: begin
                     if (adc_valid) begin
                         adc_hold   <= adc_data;
-                        uart_data  <= adc_data[15:8];  // high byte first
+                        mv_hold    <= diff_mv;    // latch converted voltage
+                        uart_data  <= adc_data[15:8];  // raw code high byte first
                         uart_valid <= 1'b1;
-                        tx_state   <= TX_HIGH;
+                        tx_state   <= TX_RAW_HI;
                     end
                 end
 
                 // -----------------------------------------------------------------
-                // High byte has been handed to uart_tx; wait until it finishes,
-                // then queue the low byte.
+                // Raw code high byte queued; wait for uart_tx to finish, then
+                // queue the raw code low byte.
                 // -----------------------------------------------------------------
-                TX_HIGH: begin
+                TX_RAW_HI: begin
                     if (uart_ready) begin
-                        uart_data  <= adc_hold[7:0];   // low byte
+                        uart_data  <= adc_hold[7:0];   // raw code low byte
                         uart_valid <= 1'b1;
-                        tx_state   <= TX_LOW;
+                        tx_state   <= TX_RAW_LO;
                     end
                 end
 
                 // -----------------------------------------------------------------
-                // Low byte has been handed to uart_tx; wait until it finishes,
-                // then return to idle.
+                // Raw code low byte queued; wait for uart_tx to finish, then
+                // queue the converted-voltage high byte.
                 // -----------------------------------------------------------------
-                TX_LOW: begin
+                TX_RAW_LO: begin
+                    if (uart_ready) begin
+                        uart_data  <= mv_hold[15:8];   // diff_mv high byte
+                        uart_valid <= 1'b1;
+                        tx_state   <= TX_MV_HI;
+                    end
+                end
+
+                // -----------------------------------------------------------------
+                // diff_mv high byte queued; wait for uart_tx to finish, then
+                // queue the converted-voltage low byte.
+                // -----------------------------------------------------------------
+                TX_MV_HI: begin
+                    if (uart_ready) begin
+                        uart_data  <= mv_hold[7:0];    // diff_mv low byte
+                        uart_valid <= 1'b1;
+                        tx_state   <= TX_MV_LO;
+                    end
+                end
+
+                // -----------------------------------------------------------------
+                // diff_mv low byte queued; wait for uart_tx to finish, then
+                // return to idle ready for the next sample.
+                // -----------------------------------------------------------------
+                TX_MV_LO: begin
                     if (uart_ready) begin
                         tx_state <= TX_IDLE;
                     end
