@@ -92,8 +92,9 @@ module ad5940_spi_master #(
     // -------------------------------------------------------------------------
     // clk_cnt counts 0 … CLK_DIV-1; tick fires every CLK_DIV system clocks.
     localparam CNT_W = $clog2(CLK_DIV) + 1; // +1 avoids zero-width when CLK_DIV=1
+    localparam [CNT_W-1:0] CLK_CNT_MAX = CLK_DIV - 1;
     reg [CNT_W-1:0] clk_cnt;
-    wire tick = (clk_cnt == CNT_W'(CLK_DIV - 1));
+    wire tick = (clk_cnt == CLK_CNT_MAX);
 
     // -------------------------------------------------------------------------
     // 48-bit shift registers
@@ -135,7 +136,7 @@ module ad5940_spi_master #(
             done <= 1'b0;
 
             // Clock divider always running
-            if (clk_cnt == CNT_W'(CLK_DIV - 1))
+            if (clk_cnt == CLK_CNT_MAX)
                 clk_cnt <= 0;
             else
                 clk_cnt <= clk_cnt + 1'b1;
