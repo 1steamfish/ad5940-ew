@@ -4891,7 +4891,10 @@ void      AD5940_ClksCalculate(ClksCalInfo_Type *pFilterInfo, uint32_t *pClocks)
 uint32_t  AD5940_SEQCycleTime(void);
 void      AD5940_SweepNext(SoftSweepCfg_Type *pSweepCfg, float *pNextFreq);
 void      AD5940_StructInit(void *pStruct, uint32_t StructSize);
-float     AD5940_ADCCode2Volt(uint32_t code, uint32_t ADCPga, float VRef1p82); /* Calculate ADC code to voltage */
+float     AD5940_ADCCode2Volt(uint32_t code, uint32_t ADCPga, float VRef1p82);    /* Convert ADC code to differential voltage (V) */
+float     AD5940_LPRtia2Ohm(uint32_t LpTiaRtia);                                 /* Convert LPTIA RTIA selection to nominal resistance (Ohm) */
+float     AD5940_HSRtia2Ohm(uint32_t HsTiaRtia);                                 /* Convert HSTIA RTIA selection to nominal resistance (Ohm) */
+float     AD5940_ADCCode2Current(uint32_t code, uint32_t ADCPga, float VRef1p82, float Rtia); /* Convert ADC code to current (A) via TIA RTIA */
 BoolFlag  AD5940_Notch50HzAvailable(ADCFilterCfg_Type *pFilterInfo, uint8_t *dl);
 BoolFlag  AD5940_Notch60HzAvailable(ADCFilterCfg_Type *pFilterInfo, uint8_t *dl);
 fImpCar_Type AD5940_ComplexDivFloat(fImpCar_Type *a, fImpCar_Type *b);

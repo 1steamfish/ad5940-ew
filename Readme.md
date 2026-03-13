@@ -1,6 +1,69 @@
 # 解释
 
-## ADCPolling
+## ADC 码转电压/电流换算 API
+
+以下工具函数在 `ad5940lib/ad5940.c` 中实现，并在 `ad5940lib/ad5940.h` 中声明。
+
+### `AD5940_ADCCode2Volt`
+
+```c
+float AD5940_ADCCode2Volt(uint32_t code, uint32_t ADCPga, float VRef1p82);
+```
+
+将 16 位原始 ADC 结果码转换为差分电压（单位：V）。
+
+- `code`：ADC 原始结果（偏移二进制，`0x8000` 对应 0 V 差分）  
+- `ADCPga`：ADC PGA 增益设置（`ADCPGA_1`、`ADCPGA_1P5`、`ADCPGA_2`、`ADCPGA_4`、`ADCPGA_9`）  
+- `VRef1p82`：实际 1.82 V 参考电压（V）  
+- 返回值：差分电压（V）
+
+**示例（ADCPolling）：**
+```c
+float diff_volt = AD5940_ADCCode2Volt(rd, ADCPGA_1P5, 1.82f);
+printf("差分电压: %.4fV, 单端电压: %.4fV\n", diff_volt, diff_volt + 1.11f);
+```
+
+### `AD5940_LPRtia2Ohm`
+
+```c
+float AD5940_LPRtia2Ohm(uint32_t LpTiaRtia);
+```
+
+将 LPTIA 内部 RTIA 选择常量（`LPTIARTIA_*`，见 `ad5940.h`）转换为标称电阻值（单位：Ω）。  
+`LPTIARTIA_OPEN` 返回 `0.0f`。对于高精度测量，应使用 `AD5940_LPRtiaCal()` 标定后的值。
+
+### `AD5940_HSRtia2Ohm`
+
+```c
+float AD5940_HSRtia2Ohm(uint32_t HsTiaRtia);
+```
+
+将 HSTIA 内部 RTIA 选择常量（`HSTIARTIA_*`，见 `ad5940.h`）转换为标称电阻值（单位：Ω）。  
+`HSTIARTIA_OPEN` 返回 `0.0f`。对于高精度测量，应使用 `AD5940_HSRtiaCal()` 标定后的值。
+
+### `AD5940_ADCCode2Current`
+
+```c
+float AD5940_ADCCode2Current(uint32_t code, uint32_t ADCPga, float VRef1p82, float Rtia);
+```
+
+通过 TIA（跨阻放大器）的反馈电阻将 ADC 结果码转换为电流（单位：A）。  
+内部调用 `AD5940_ADCCode2Volt()` 获取差分电压，再除以 `Rtia` 得到电流：  
+`I = V_diff / Rtia`
+
+- `Rtia`：跨阻放大器反馈电阻（Ω）。可用 `AD5940_LPRtia2Ohm()` / `AD5940_HSRtia2Ohm()` 获取标称值，或传入标定值。  
+- `Rtia == 0.0f` 时返回 `0.0f`。
+
+**示例（LPTIA 电流测量）：**
+```c
+/* LPTIA 配置：PGA=1.5, RTIA=10kΩ */
+float rtia = AD5940_LPRtia2Ohm(LPTIARTIA_10K);          /* 10000.0 Ω */
+float current = AD5940_ADCCode2Current(adc_code, ADCPGA_1P5, 1.82f, rtia);
+printf("电流: %.4f µA\n", current * 1e6f);
+```
+
+---
+
 
 这个文件 AD5940_ADCPolling.c 是一个“ADC 轮询/查询（Polling）模式”的示例：把 AD5940 的 ADC 配好以后，不用 FIFO/DFT 之类的复杂链路，而是持续运行 ADC 转换，并通过检查“数据就绪”中断标志来读出最新的滤波结果，再把结果换算成电压打印出来。
 

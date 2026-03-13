@@ -654,6 +654,98 @@ float AD5940_ADCCode2Volt(uint32_t code, uint32_t ADCPga, float VRef1p82)
 }
 
 /**
+  @brief Get the nominal resistance in Ohms for an LPTIA internal RTIA selection.
+  @details Returns the nominal resistance corresponding to the given LPTIARTIA
+           constant. For accurate current calculations, use calibrated resistance
+           values obtained from AD5940_LPRtiaCal().
+  @param LpTiaRtia: LPTIA RTIA selection from @ref LPTIARTIA_Const.
+  @return Resistance in Ohms. Returns 0.0f for LPTIARTIA_OPEN or an invalid selection.
+**/
+float AD5940_LPRtia2Ohm(uint32_t LpTiaRtia)
+{
+  static const float LpRtiaTable[] = {
+    0.0f,       /* LPTIARTIA_OPEN  */
+    200.0f,     /* LPTIARTIA_200R  */
+    1000.0f,    /* LPTIARTIA_1K    */
+    2000.0f,    /* LPTIARTIA_2K    */
+    3000.0f,    /* LPTIARTIA_3K    */
+    4000.0f,    /* LPTIARTIA_4K    */
+    6000.0f,    /* LPTIARTIA_6K    */
+    8000.0f,    /* LPTIARTIA_8K    */
+    10000.0f,   /* LPTIARTIA_10K   */
+    12000.0f,   /* LPTIARTIA_12K   */
+    16000.0f,   /* LPTIARTIA_16K   */
+    20000.0f,   /* LPTIARTIA_20K   */
+    24000.0f,   /* LPTIARTIA_24K   */
+    30000.0f,   /* LPTIARTIA_30K   */
+    32000.0f,   /* LPTIARTIA_32K   */
+    40000.0f,   /* LPTIARTIA_40K   */
+    48000.0f,   /* LPTIARTIA_48K   */
+    64000.0f,   /* LPTIARTIA_64K   */
+    85000.0f,   /* LPTIARTIA_85K   */
+    96000.0f,   /* LPTIARTIA_96K   */
+    100000.0f,  /* LPTIARTIA_100K  */
+    120000.0f,  /* LPTIARTIA_120K  */
+    128000.0f,  /* LPTIARTIA_128K  */
+    160000.0f,  /* LPTIARTIA_160K  */
+    196000.0f,  /* LPTIARTIA_196K  */
+    256000.0f,  /* LPTIARTIA_256K  */
+    512000.0f,  /* LPTIARTIA_512K  */
+  };
+  if(LpTiaRtia > LPTIARTIA_512K)
+    return 0.0f;
+  return LpRtiaTable[LpTiaRtia];
+}
+
+/**
+  @brief Get the nominal resistance in Ohms for an HSTIA internal RTIA selection.
+  @details Returns the nominal resistance corresponding to the given HSTIARTIA
+           constant. For accurate current calculations, use calibrated resistance
+           values obtained from AD5940_HSRtiaCal().
+  @param HsTiaRtia: HSTIA RTIA selection from @ref HSTIARTIA_Const.
+  @return Resistance in Ohms. Returns 0.0f for HSTIARTIA_OPEN or an invalid selection.
+**/
+float AD5940_HSRtia2Ohm(uint32_t HsTiaRtia)
+{
+  static const float HsRtiaTable[] = {
+    200.0f,     /* HSTIARTIA_200   */
+    1000.0f,    /* HSTIARTIA_1K    */
+    5000.0f,    /* HSTIARTIA_5K    */
+    10000.0f,   /* HSTIARTIA_10K   */
+    20000.0f,   /* HSTIARTIA_20K   */
+    40000.0f,   /* HSTIARTIA_40K   */
+    80000.0f,   /* HSTIARTIA_80K   */
+    160000.0f,  /* HSTIARTIA_160K  */
+    0.0f,       /* HSTIARTIA_OPEN  */
+  };
+  if(HsTiaRtia > HSTIARTIA_OPEN)
+    return 0.0f;
+  return HsRtiaTable[HsTiaRtia];
+}
+
+/**
+  @brief Convert ADC Code to current using the TIA trans-impedance resistor.
+  @details The measured current flows through the RTIA, generating a differential
+           voltage that is amplified by the ADC PGA and digitised. This function
+           recovers the current from the ADC code:
+             I = AD5940_ADCCode2Volt(code, ADCPga, VRef1p82) / Rtia
+           Use AD5940_LPRtia2Ohm() or AD5940_HSRtia2Ohm() to obtain the Rtia
+           value from an RTIA selection constant, or supply a calibrated resistance
+           value from AD5940_LPRtiaCal() / AD5940_HSRtiaCal() for higher accuracy.
+  @param code: 16-bit ADC result code (offset-binary; 0x8000 represents 0 V differential).
+  @param ADCPga: ADC PGA gain setting used for this result (@ref ADCPGA_Const).
+  @param VRef1p82: Actual 1.82 V reference voltage used by the ADC (unit: V).
+  @param Rtia: Trans-impedance amplifier feedback resistance (unit: Ohm).
+  @return Current in Amperes (A). Returns 0.0f when Rtia is 0.
+**/
+float AD5940_ADCCode2Current(uint32_t code, uint32_t ADCPga, float VRef1p82, float Rtia)
+{
+  if(Rtia == 0.0f)
+    return 0.0f;
+  return AD5940_ADCCode2Volt(code, ADCPga, VRef1p82) / Rtia;
+}
+
+/**
  * @brief Do complex number division.
  * @param a: The dividend.
  * @param b: The divisor.

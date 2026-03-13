@@ -87,11 +87,14 @@ void AD5940_Main(void)
         FifoCnt = AD5940_FIFOGetCnt();
         AD5940_FIFORd((uint32_t *)ADCBuff, FifoCnt);
         AD5940_INTCClrFlag(AFEINTSRC_DATAFIFOTHRESH);
-        printf("Get %d data, ADC Code[0]:%d\n",FifoCnt, ADCBuff[0]&0xffff);
-        /*!!!!!NOTE!!!!!*/
-        /* The mean result already removed 32768. So to calculate the voltage, assume mean result is n, use below equation.
-          Voltage = n/32768*Vref
-         */
+        {
+          /* The mean result has the 32768 offset already removed.
+             Voltage = (int16_t)mean_code / 32768.0 * VRef1p82 / PGA_gain * kFactor
+             With ADCPGA_1 (gain=1) and VRef1p82=1.82V, this simplifies to the call below. */
+          int16_t mean_code = (int16_t)(ADCBuff[0] & 0xffff);
+          float volt = AD5940_ADCCode2Volt((uint32_t)((int32_t)mean_code + 32768), ADCPGA_1, 1.82f);
+          printf("Get %d data, ADC Code[0]:%d, Voltage: %.4fV\n", FifoCnt, (int)mean_code, volt);
+        }
       }
     }
   }
