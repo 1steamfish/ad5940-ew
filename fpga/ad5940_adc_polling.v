@@ -39,11 +39,22 @@
 //   BOOT_CYCLES  – how many clk cycles to wait after reset before SPI access
 //                  (default: 10 ms @ 50 MHz).
 //
+// Runtime configuration ports (driven by ad5940_top via the UART command decoder):
+//   cfg_adccon       – ADCCON (0x21A8) register value.
+//                      Bit fields: [5:0]=MuxP [12:8]=MuxN [18:16]=PGA gain.
+//                      Default: 32'h00010812 (MuxP=VREF1P8DAC, MuxN=VSET1P1, PGA=×1.5).
+//   cfg_adcfiltercon – ADCFILTERCON (0x2044) register value.
+//                      Bit fields: [0]=ADC rate [4]=BpNotch [11:8]=SINC2OSR [13:12]=SINC3OSR.
+//                      Default: 32'h00001B11 (SINC3OSR=4, SINC2OSR=1333, BpNotch=1, 800kSPS).
+//   cfg_reconfig     – One-cycle pulse.  When asserted the module restarts the full
+//                      22-step initialisation sequence with the current cfg_* values.
+//                      Captured by a latch; safe to assert at any time during polling.
+//
 // Register values computed from the C source:
 //   Step 14  : PMBW  (0x22F0) ← 0x0000000C  [LP mode, 250 kHz BW]
 //   Step 15  : AFECON(0x2000) ← 0x00180040  [DACREFEN + DACEN, ALDOILIMITEN kept]
-//   Step 16  : ADCCON(0x21A8) ← 0x00010812  [MuxP=0x12 MuxN=0x08 PGA=1 (×1.5)]
-//   Step 17  : ADCFILTERCON(0x2044) ← 0x00001B11  [SINC3OSR=4 SINC2OSR=1333 BpNotch]
+//   Step 16  : ADCCON(0x21A8) ← cfg_adccon   [runtime: MuxP / MuxN / PGA]
+//   Step 17  : ADCFILTERCON(0x2044) ← cfg_adcfiltercon  [runtime: filter chain]
 //   Step 18  : AFECON(0x2000) ← 0x00190040  [+ SINC2NOTCH]
 //   Step 19  : INTCSEL1(0x300C) ← 0xFFFFFFFF [all interrupts → INTC1]
 //   Step 20  : AFECON(0x2000) ← 0x001900C0  [+ ADCEN]
@@ -58,6 +69,21 @@ module ad5940_adc_polling #(
 )(
     input  wire        clk,
     input  wire        rst_n,
+
+    // Runtime configuration – driven by the UART command decoder in ad5940_top.
+    // Changes take effect on the next polling cycle after cfg_reconfig is asserted.
+    input  wire [31:0] cfg_adccon,        // ADCCON register value
+                                          //   default 32'h00010812:
+                                          //   bits[5:0]  =MuxP(0x12=VREF1P8DAC)
+                                          //   bits[12:8] =MuxN(0x08=VSET1P1)
+                                          //   bits[18:16]=PGA (0x1 = ×1.5)
+    input  wire [31:0] cfg_adcfiltercon,  // ADCFILTERCON register value
+                                          //   default 32'h00001B11:
+                                          //   bit[0]     =ADC rate (1=800kSPS)
+                                          //   bit[4]     =BpNotch (1=bypass)
+                                          //   bits[11:8] =SINC2OSR(11=1333)
+                                          //   bits[13:12]=SINC3OSR(1=4)
+    input  wire        cfg_reconfig,      // one-cycle pulse: restart init with new config
 
     // ADC result output
     output reg         adc_valid,   // one-cycle pulse: adc_data holds a new sample
@@ -98,6 +124,26 @@ module ad5940_adc_polling #(
     reg [31:0] delay_cnt;
 
     // =========================================================================
+    // Reconfig latch
+    // =========================================================================
+    // Captures a cfg_reconfig pulse that arrives at any time.  The latch is
+    // cleared and the init sequence restarted when the FSM reaches MS_POLL_ISSUE
+    // (the only state where no SPI transaction is in flight).
+    // =========================================================================
+    reg cfg_reconfig_latch;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cfg_reconfig_latch <= 1'b0;
+        end else begin
+            if (cfg_reconfig)
+                cfg_reconfig_latch <= 1'b1;
+            else if (main_state == MS_POLL_ISSUE && cfg_reconfig_latch)
+                cfg_reconfig_latch <= 1'b0;
+        end
+    end
+
+    // =========================================================================
     // Init-sequence ROM
     // =========================================================================
     // 22 sequential register writes that reproduce:
@@ -133,13 +179,10 @@ module ad5940_adc_polling #(
             // --- AD5940_AFECtrlS(DACREFPWR|HSDACPWR, bTRUE) ---
             // AFECON reset=0x00080000 | DACREFEN(bit20)=0x100000 | DACEN(bit6)=0x40
             5'd15: begin rom_addr = 16'h2000; rom_data = 32'h00180040; end
-            // --- AD5940_ADCBaseCfgS: MuxP=0x12 MuxN=0x8 PGA=1(×1.5) ---
-            // ADCCON = MuxP[5:0] | (MuxN<<8) | (PGA<<16) = 0x12|0x800|0x10000
-            5'd16: begin rom_addr = 16'h21A8; rom_data = 32'h00010812; end
-            // --- AD5940_ADCFilterCfgS: SINC3OSR=4(1) SINC2OSR=1333(11) Rate=800k BpNotch ---
-            // ADCFILTERCON = Rate(1)|BpNotch(0x10)|(SINC2OSR(11)<<8)|(SINC3OSR(1)<<12)
-            //              = 0x1 | 0x10 | 0xB00 | 0x1000 = 0x1B11
-            5'd17: begin rom_addr = 16'h2044; rom_data = 32'h00001B11; end
+            // --- AD5940_ADCBaseCfgS: MuxP/MuxN/PGA – runtime configurable ---
+            5'd16: begin rom_addr = 16'h21A8; rom_data = cfg_adccon;       end
+            // --- AD5940_ADCFilterCfgS: filter chain – runtime configurable ---
+            5'd17: begin rom_addr = 16'h2044; rom_data = cfg_adcfiltercon; end
             // --- AD5940_AFECtrlS(SINC2NOTCH, bTRUE): set bit16 in AFECON ---
             5'd18: begin rom_addr = 16'h2000; rom_data = 32'h00190040; end
             // --- AD5940_INTCCfg(AFEINTC_1, AFEINTSRC_ALLINT, bTRUE) ---
@@ -255,11 +298,19 @@ module ad5940_adc_polling #(
 
                 // -----------------------------------------------------------------
                 // Poll: read INTCFLAG1 (0x3014) and check SINC2RDY (bit 2).
+                // If a reconfiguration is pending, restart the init sequence
+                // instead.  This is the only safe point to do so because no SPI
+                // transaction is in flight.
                 // -----------------------------------------------------------------
                 MS_POLL_ISSUE: begin
-                    spi_rd_en  <= 1'b1;
-                    spi_addr   <= 16'h3014; // REG_INTC_INTCFLAG1
-                    main_state <= MS_POLL_WAIT;
+                    if (cfg_reconfig_latch) begin
+                        init_step  <= 5'd0;
+                        main_state <= MS_INIT_ISSUE;
+                    end else begin
+                        spi_rd_en  <= 1'b1;
+                        spi_addr   <= 16'h3014; // REG_INTC_INTCFLAG1
+                        main_state <= MS_POLL_WAIT;
+                    end
                 end
 
                 MS_POLL_WAIT: begin

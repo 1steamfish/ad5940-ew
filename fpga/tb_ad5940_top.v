@@ -116,6 +116,7 @@ module tb_ad5940_top;
     reg  rst_n;
 
     wire uart_tx_pin;
+    reg  uart_rx_pin;        // driven by tb to send config commands to DUT
     wire afe_rst_n;
     wire spi_cs_n;
     wire spi_clk;
@@ -135,6 +136,7 @@ module tb_ad5940_top;
         .clk         (clk),
         .rst_n       (rst_n),
         .uart_tx_pin (uart_tx_pin),
+        .uart_rx_pin (uart_rx_pin),
         .afe_rst_n   (afe_rst_n),
         .spi_cs_n    (spi_cs_n),
         .spi_clk     (spi_clk),
@@ -159,7 +161,7 @@ module tb_ad5940_top;
     always  #10 clk = ~clk;
 
     // -------------------------------------------------------------------------
-    // UART receive task
+    // UART receive task (DUT → TB)
     //
     // Detects the falling edge of uart_tx_pin (start bit), then samples each
     // of the 8 data bits at the centre of their respective bit periods (LSB
@@ -184,6 +186,43 @@ module tb_ad5940_top;
     endtask
 
     // -------------------------------------------------------------------------
+    // UART transmit task (TB → DUT via uart_rx_pin)
+    //
+    // Sends a single byte as an 8N1 UART frame at the simulation baud rate.
+    // The byte is sent LSB-first.
+    // -------------------------------------------------------------------------
+    task uart_send;
+        input [7:0] byte_val;
+        integer i;
+        begin
+            // Start bit
+            uart_rx_pin = 1'b0;
+            repeat (CLKS_PER_BIT) @(posedge clk);
+            // Data bits (LSB first)
+            for (i = 0; i < 8; i = i + 1) begin
+                uart_rx_pin = byte_val[i];
+                repeat (CLKS_PER_BIT) @(posedge clk);
+            end
+            // Stop bit
+            uart_rx_pin = 1'b1;
+            repeat (CLKS_PER_BIT) @(posedge clk);
+        end
+    endtask
+
+    // -------------------------------------------------------------------------
+    // Send a 3-byte config packet: [0xA5][CMD][VAL]
+    // -------------------------------------------------------------------------
+    task cfg_send;
+        input [7:0] cmd;
+        input [7:0] val;
+        begin
+            uart_send(8'hA5);
+            uart_send(cmd);
+            uart_send(val);
+        end
+    endtask
+
+    // -------------------------------------------------------------------------
     // Test stimulus
     // -------------------------------------------------------------------------
     integer sample_count;
@@ -194,8 +233,9 @@ module tb_ad5940_top;
     reg [15:0] recv_word;
 
     initial begin
-        sample_count = 0;
-        pass_count   = 0;
+        sample_count  = 0;
+        pass_count    = 0;
+        uart_rx_pin   = 1'b1;   // idle high
 
         // Apply reset
         rst_n = 1'b0;
@@ -204,8 +244,33 @@ module tb_ad5940_top;
 
         $display("[TB-TOP] Reset released, waiting for UART samples...");
 
-        // Collect 5 samples (each sample = 2 UART bytes)
-        repeat (5) begin
+        // --- Phase 1: collect 3 samples with the default configuration ---
+        $display("[TB-TOP] Phase 1: default configuration");
+        repeat (3) begin
+            uart_recv(recv_high);
+            uart_recv(recv_low);
+            recv_word    = {recv_high, recv_low};
+            sample_count = sample_count + 1;
+
+            $display("[TB-TOP] Sample #%0d : 0x%04X (high=0x%02X  low=0x%02X)",
+                     sample_count, recv_word, recv_high, recv_low);
+
+            if (recv_word === 16'h8000) begin
+                $display("[TB-TOP]   PASS – received 0x8000");
+                pass_count = pass_count + 1;
+            end else begin
+                $display("[TB-TOP]   FAIL – expected 0x8000, got 0x%04X", recv_word);
+            end
+        end
+
+        // --- Phase 2: send a config command to change PGA to ×2 (CMD=0x02, VAL=2) ---
+        $display("[TB-TOP] Sending config: CMD=0x02 (PGA), VAL=0x02 (×2)");
+        cfg_send(8'h02, 8'h02);
+        $display("[TB-TOP] Config command sent, waiting for re-init and new samples...");
+
+        // --- Phase 3: collect 2 samples after reconfiguration ---
+        $display("[TB-TOP] Phase 3: after PGA reconfiguration");
+        repeat (2) begin
             uart_recv(recv_high);
             uart_recv(recv_low);
             recv_word    = {recv_high, recv_low};

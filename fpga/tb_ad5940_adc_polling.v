@@ -175,22 +175,26 @@ module tb_ad5940_adc_polling;
     // DUT instantiation
     // Use tiny RESET_CYCLES / BOOT_CYCLES to make the simulation fast.
     // CLK_DIV=2 → SCLK = sys_clk/4 (plenty of timing margin).
+    // cfg_* ports are held at their default values; cfg_reconfig is tied low.
     // -------------------------------------------------------------------------
     ad5940_adc_polling #(
         .CLK_DIV      (2),
         .RESET_CYCLES (10),
         .BOOT_CYCLES  (20)
     ) dut (
-        .clk       (clk),
-        .rst_n     (rst_n),
-        .adc_valid (adc_valid),
-        .adc_data  (adc_data),
-        .state_out (state_out),
-        .afe_rst_n (afe_rst_n),
-        .spi_cs_n  (spi_cs_n),
-        .spi_clk   (spi_clk),
-        .spi_mosi  (spi_mosi),
-        .spi_miso  (spi_miso)
+        .clk              (clk),
+        .rst_n            (rst_n),
+        .cfg_adccon       (32'h00010812),  // default: MuxP=VREF1P8DAC, MuxN=VSET1P1, PGA=×1.5
+        .cfg_adcfiltercon (32'h00001B11),  // default: SINC3OSR=4, SINC2OSR=1333, BpNotch=1
+        .cfg_reconfig     (1'b0),
+        .adc_valid        (adc_valid),
+        .adc_data         (adc_data),
+        .state_out        (state_out),
+        .afe_rst_n        (afe_rst_n),
+        .spi_cs_n         (spi_cs_n),
+        .spi_clk          (spi_clk),
+        .spi_mosi         (spi_mosi),
+        .spi_miso         (spi_miso)
     );
 
     // -------------------------------------------------------------------------
