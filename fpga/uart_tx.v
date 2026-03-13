@@ -33,7 +33,7 @@ module uart_tx #(
     // Number of system-clock cycles per UART bit
     localparam CLKS_PER_BIT = CLK_FREQ / BAUD_RATE;
     localparam CNT_W        = $clog2(CLKS_PER_BIT) + 1;
-    localparam [CNT_W-1:0] CNT_MAX = CNT_W'(CLKS_PER_BIT - 1);
+    localparam [CNT_W-1:0] CNT_MAX = CLKS_PER_BIT - 1;
 
     // State encoding
     localparam [1:0]
